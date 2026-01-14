@@ -4,7 +4,7 @@ import { useMemo } from 'react';
 
 import 'react-native-gesture-handler';
 
-import Navigation from './navigation';
+import Navigation from '@navigation/index';
 
 export default function App() {
   const colorScheme = useColorScheme();
