@@ -79,7 +79,7 @@ const RootStack = createNativeStackNavigator({
 // Type definitions
 export type RootStackParamList = {
   MainTabs: undefined;
-  Detail: { item: Item } | { user: User };
+  Detail: { userId: number };
 };
 
 type RootNavigatorParamList = StaticParamList<typeof RootStack>;

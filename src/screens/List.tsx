@@ -1,55 +1,128 @@
-import { useNavigation } from '@react-navigation/native';
-import { useEffect } from 'react';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import {
+  AppState,
   StyleSheet,
   View,
   FlatList,
-  TouchableOpacity,
-  Image,
-  TextInput,
-  Text,
-  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  RefreshControl,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 import { User, RootStackParamList } from '@navigation/index';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { useUsersStore } from '@store/store';
 import { ErrorView } from '@components/ErrorView';
 import { EmptyView } from '@components/EmptyView';
+import { UserCard } from '@components/UserCard';
+import { UserSkeleton } from '@components/UserSkeleton';
+import { SearchBar } from '@components/SearchBar';
+import { FilterChip } from '@components/FilterChip';
 
 export default function List() {
   const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
-  const { users, loading, error, fetchUsers } = useUsersStore();
+  const { users, loading, refreshing, error, fetchUsers, refreshUsers, startPolling, stopPolling } =
+    useUsersStore();
 
-  useEffect(() => {
-    fetchUsers();
-  }, [fetchUsers]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [activeFilter, setActiveFilter] = useState<'All' | 'Fav' | 'Recent'>('All');
 
-  const renderItem = ({ item }: { item: User }) => (
-    <TouchableOpacity
-      style={styles.card}
-      onPress={() => navigation.navigate('Detail', { user: item })}>
-      <Image source={{ uri: item.profile_picture }} style={styles.cardImage} />
-      <Text style={styles.cardTitle}>{`${item.first_name} ${item.last_name}`}</Text>
-      <Text style={styles.cardSubtitle}>{item.email}</Text>
-      <Text style={styles.cardJob}>{item.job}</Text>
-      <View style={styles.actionButtons}>
-        <TouchableOpacity style={styles.actionButton}>
-          <Ionicons name="thumbs-up-outline" size={24} color="#2196F3" />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.actionButton}>
-          <Ionicons name="thumbs-down-outline" size={24} color="#2196F3" />
-        </TouchableOpacity>
-      </View>
-    </TouchableOpacity>
+  const filteredUsers = useMemo(() => {
+    let filtered = users;
+    console.log(`📋 List: Starting filter with ${users.length} total users`);
+
+    // Apply search filter
+    if (searchQuery) {
+      const beforeSearch = filtered.length;
+      filtered = filtered.filter(user =>
+        `${user.first_name} ${user.last_name}`.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        user.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        user.job.toLowerCase().includes(searchQuery.toLowerCase())
+      );
+      console.log(`📋 List: Search "${searchQuery}" filtered ${beforeSearch} -> ${filtered.length} users`);
+    }
+
+    // Apply chip filter
+    if (activeFilter === 'Fav') {
+      const beforeFav = filtered.length;
+      filtered = filtered.filter(user => user.job.includes('Engineer'));
+      console.log(`📋 List: Fav filter applied: ${beforeFav} -> ${filtered.length} users (Engineers only)`);
+    } else if (activeFilter === 'Recent') {
+      const beforeRecent = filtered.length;
+      filtered = filtered.slice(0, 5);
+      console.log(`📋 List: Recent filter applied: ${beforeRecent} -> ${filtered.length} users (first 5)`);
+    } else {
+      console.log(`📋 List: All filter applied: ${filtered.length} users`);
+    }
+
+    console.log(`📋 List: Final filtered result: ${filtered.length} users`);
+    return filtered;
+  }, [users, searchQuery, activeFilter]);
+
+  const handleUserPress = useCallback((userId: number) => {
+    console.log(`👆 Selected user: ID=${userId}`);
+    navigation.navigate('Detail', { userId });
+  }, [navigation]);
+
+  const handleSearch = useCallback((query: string) => {
+    console.log(`📋 List: Search triggered with query "${query}"`);
+    setSearchQuery(query);
+  }, []);
+
+  // Focus effect: fetch when screen becomes focused, start polling
+  useFocusEffect(
+    useCallback(() => {
+      console.log('📱 List screen focused - fetching users and starting polling');
+      const controller = new AbortController();
+      fetchUsers(controller.signal);
+      startPolling();
+
+      return () => {
+        console.log('📱 List screen blurred - stopping polling and cancelling requests');
+        stopPolling();
+      };
+    }, [fetchUsers, startPolling, stopPolling])
   );
+
+  // App state effect: handle background/foreground
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'background') {
+        console.log('📱 App went to background - stopping polling to save battery');
+        stopPolling();
+      } else if (nextAppState === 'active') {
+        // Only resume polling if screen is still focused
+        if (navigation.isFocused()) {
+          console.log('📱 App came to foreground - resuming polling');
+          startPolling();
+        } else {
+          console.log('📱 App foreground but screen not focused - not starting polling');
+        }
+      }
+    });
+
+    return () => {
+      console.log('🧹 Cleaning up AppState listener');
+      subscription.remove();
+    };
+  }, [navigation, startPolling, stopPolling]);
+
+  const renderItem = useCallback(({ item }: { item: User }) => (
+    <UserCard
+      user={item}
+      onPress={handleUserPress}
+    />
+  ), [handleUserPress]);
 
   if (loading) {
     return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color="#2196F3" />
-        <Text style={styles.loadingText}>Đang tải...</Text>
-      </View>
+      <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        <View style={styles.loadingContainer}>
+          {Array.from({ length: 5 }).map((_, index) => (
+            <UserSkeleton key={index} />
+          ))}
+        </View>
+      </KeyboardAvoidingView>
     );
   }
 
@@ -62,19 +135,53 @@ export default function List() {
   }
 
   return (
-    <View style={styles.container}>
-      <TextInput
-        style={styles.searchInput}
+    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      <SearchBar
         placeholder="Tìm kiếm người dùng"
-        placeholderTextColor="#999"
+        onSearch={handleSearch}
       />
+      <View style={styles.filterContainer}>
+        <FilterChip
+          label="All"
+          isActive={activeFilter === 'All'}
+          onPress={() => {
+            console.log('🏷️ FilterChip: All pressed');
+            setActiveFilter('All');
+          }}
+        />
+        <FilterChip
+          label="Fav"
+          isActive={activeFilter === 'Fav'}
+          onPress={() => {
+            console.log('🏷️ FilterChip: Fav pressed');
+            setActiveFilter('Fav');
+          }}
+        />
+        <FilterChip
+          label="Recent"
+          isActive={activeFilter === 'Recent'}
+          onPress={() => {
+            console.log('🏷️ FilterChip: Recent pressed');
+            setActiveFilter('Recent');
+          }}
+        />
+      </View>
       <FlatList
-        data={users}
+        data={filteredUsers}
         keyExtractor={(item) => item.id.toString()}
         renderItem={renderItem}
         contentContainerStyle={styles.listContainer}
+        keyboardShouldPersistTaps="handled"
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={refreshUsers}
+            colors={['#2196F3']}
+            tintColor="#2196F3"
+          />
+        }
       />
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -83,75 +190,17 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#fff',
   },
-  centerContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-  },
-  loadingText: {
-    marginTop: 16,
-    fontSize: 16,
-    color: '#666',
-  },
-  searchInput: {
-    height: 44,
-    borderColor: '#ccc',
-    borderWidth: 1,
-    borderRadius: 22,
-    marginHorizontal: 16,
-    marginVertical: 12,
+  loadingContainer: {
     paddingHorizontal: 16,
-    fontSize: 16,
+    paddingTop: 16,
+  },
+  filterContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    paddingVertical: 8,
   },
   listContainer: {
     paddingHorizontal: 16,
     paddingBottom: 16,
-  },
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  cardImage: {
-    width: 100,
-    height: 100,
-    borderRadius: 16,
-    marginBottom: 12,
-  },
-  cardTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#000',
-    textAlign: 'center',
-    marginBottom: 4,
-  },
-  cardSubtitle: {
-    fontSize: 14,
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 4,
-  },
-  cardJob: {
-    fontSize: 12,
-    color: '#888',
-    textAlign: 'center',
-    marginBottom: 12,
-    fontStyle: 'italic',
-  },
-  actionButtons: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 24,
-  },
-  actionButton: {
-    padding: 8,
   },
 });
