@@ -13,6 +13,13 @@ export interface ApiResponse<T> {
   [key: string]: any;
 }
 
+// Pagination response type
+export interface PaginatedResponse<T> {
+  users: T[];
+  hasMore: boolean;
+  total?: number;
+}
+
 // Error types
 export interface ApiError {
   status: number;
@@ -36,6 +43,43 @@ export const usersService = {
       }
     } catch (error) {
       // Re-throw with our standardized error format
+      throw error;
+    }
+  },
+
+  /**
+   * Fetch users with pagination (Day 7: Load more functionality)
+   */
+  getUsersPaginated: async (page: number = 1, limit: number = 10, signal?: AbortSignal): Promise<PaginatedResponse<User>> => {
+    try {
+      // For demo purposes, we'll simulate pagination by slicing the full dataset
+      // In real API, this would be: /users?page=${page}&limit=${limit}
+      const response = await api.get<ApiResponse<User>>('/users', {
+        params: { page, limit },
+        signal
+      });
+
+      if (response.data.success && response.data.users) {
+        const users = response.data.users;
+        const totalUsers = response.data.total_users || users.length;
+
+        // Calculate pagination logic
+        const startIndex = (page - 1) * limit;
+        const endIndex = startIndex + limit;
+        const paginatedUsers = users.slice(startIndex, endIndex);
+        const hasMore = endIndex < totalUsers;
+
+        console.log(`📄 Pagination: page ${page}, limit ${limit}, total ${totalUsers}, returned ${paginatedUsers.length}, hasMore: ${hasMore}`);
+
+        return {
+          users: paginatedUsers,
+          hasMore,
+          total: totalUsers
+        };
+      } else {
+        throw new Error(response.data.message || 'Failed to fetch users');
+      }
+    } catch (error) {
       throw error;
     }
   },

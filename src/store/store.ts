@@ -13,6 +13,9 @@ interface UsersState {
   users: User[];
   loading: boolean;
   refreshing: boolean;
+  loadingMore: boolean; // Day 7: Loading state for pagination
+  hasMore: boolean;     // Day 7: Are there more items to load?
+  page: number;         // Day 7: Current page for pagination
   error: string | null;
   pollingInterval: NodeJS.Timeout | null;
   abortController: AbortController | null;
@@ -28,6 +31,7 @@ interface UsersState {
   isCommenting: boolean;
   fetchUsers: (signal?: AbortSignal) => Promise<void>;
   refreshUsers: (signal?: AbortSignal) => Promise<void>;
+  loadMoreUsers: (signal?: AbortSignal) => Promise<void>; // Day 7: Load more users
   fetchUserById: (id: number, signal?: AbortSignal) => Promise<void>;
   startPolling: () => void;
   stopPolling: () => void;
@@ -43,6 +47,9 @@ export const useUsersStore = create<UsersState>((set, get) => ({
   users: [],
   loading: false,
   refreshing: false,
+  loadingMore: false, // Day 7: Initial pagination state
+  hasMore: true,     // Day 7: Assume more data initially
+  page: 1,           // Day 7: Start from page 1
   error: null,
   pollingInterval: null,
   abortController: null,
@@ -104,6 +111,51 @@ export const useUsersStore = create<UsersState>((set, get) => ({
       const errorMessage = error?.message || 'Failed to refresh users';
       console.error('Refresh Error:', errorMessage);
       set({ error: errorMessage, refreshing: false });
+    }
+  },
+
+  loadMoreUsers: async (signal?: AbortSignal) => {
+    const { users, loadingMore, hasMore, page } = get();
+
+    // Prevent loading more if already loading or no more data
+    if (loadingMore || !hasMore) {
+      console.log('🚫 Load more blocked: loadingMore=', loadingMore, 'hasMore=', hasMore);
+      return;
+    }
+
+    console.log(`📄 Loading more users: page ${page + 1}`);
+    set({ loadingMore: true });
+
+    try {
+      const response = await usersService.getUsersPaginated(page + 1, 10, signal);
+      const newUsers = response.users;
+      const hasMoreData = response.hasMore;
+
+      console.log(`📄 Loaded ${newUsers.length} more users, hasMore: ${hasMoreData}`);
+
+      set({
+        users: [...users, ...newUsers],
+        page: page + 1,
+        hasMore: hasMoreData,
+        loadingMore: false
+      });
+    } catch (error: any) {
+      // Check if error is due to abortion
+      if (
+        error.code === 'ERR_CANCELED' ||
+        error.message?.includes('canceled') ||
+        error.name === 'CanceledError' ||
+        error.name === 'AbortError' ||
+        error.message?.includes('aborted')
+      ) {
+        console.log('🚫 Load more users request was cancelled');
+        set({ loadingMore: false });
+        return;
+      }
+      // Error is now handled by axios interceptors, so we get standardized error objects
+      const errorMessage = error?.message || 'Failed to load more users';
+      console.error('Load More Error:', errorMessage);
+      set({ error: errorMessage, loadingMore: false });
     }
   },
 

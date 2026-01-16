@@ -9,9 +9,11 @@ import {
   Platform,
   RefreshControl,
 } from 'react-native';
+import NetInfo from '@react-native-community/netinfo';
 import { User, RootStackParamList } from '@navigation/index';
 import { StackNavigationProp } from '@react-navigation/stack';
-import { useUsersStore } from '@store/store';
+import { useUsersStore } from '../store/store';
+import { usersService } from '../services/users';
 import { ErrorView } from '@components/ErrorView';
 import { EmptyView } from '@components/EmptyView';
 import { UserCard } from '@components/UserCard';
@@ -21,11 +23,12 @@ import { FilterChip } from '@components/FilterChip';
 
 export default function List() {
   const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
-  const { users, loading, refreshing, error, fetchUsers, refreshUsers, startPolling, stopPolling } =
+  const { users, loading, refreshing, loadingMore, hasMore, error, fetchUsers, refreshUsers, loadMoreUsers, startPolling, stopPolling } =
     useUsersStore();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<'All' | 'Fav' | 'Recent'>('All');
+  const [isOnline, setIsOnline] = useState(true);
 
   const filteredUsers = useMemo(() => {
     let filtered = users;
@@ -69,19 +72,49 @@ export default function List() {
     setSearchQuery(query);
   }, []);
 
-  // Focus effect: fetch when screen becomes focused, start polling
+  const handleLoadMore = useCallback(() => {
+    if (hasMore && !loadingMore) {
+      console.log('📄 onEndReached triggered - loading more users');
+      loadMoreUsers();
+    }
+  }, [loadMoreUsers, hasMore, loadingMore]);
+
+  // Load initial data when component mounts
+  useEffect(() => {
+    const loadInitialData = async () => {
+      console.log('📱 Loading initial users (Day 7: Pagination)');
+      const controller = new AbortController();
+
+      try {
+        const response = await usersService.getUsersPaginated(1, 10, controller.signal);
+        useUsersStore.setState({
+          users: response.users,
+          hasMore: response.hasMore,
+          page: 1,
+          loading: false,
+          error: null
+        });
+        console.log(`📄 Initial load: ${response.users.length} users, hasMore: ${response.hasMore}`);
+      } catch (error: any) {
+        console.error('Initial load error:', error);
+        useUsersStore.setState({ error: error?.message || 'Failed to load users', loading: false });
+      }
+    };
+
+    loadInitialData();
+  }, []);
+
+  // Focus effect: start/stop polling when screen focus changes
   useFocusEffect(
     useCallback(() => {
-      console.log('📱 List screen focused - fetching users and starting polling');
-      const controller = new AbortController();
-      fetchUsers(controller.signal);
+      console.log('📱 List screen focused - starting polling');
       startPolling();
 
       return () => {
-        console.log('📱 List screen blurred - stopping polling and cancelling requests');
+        console.log('📱 List screen blurred - stopping polling');
         stopPolling();
       };
-    }, [fetchUsers, startPolling, stopPolling])
+    }, [startPolling, stopPolling])
   );
 
   // App state effect: handle background/foreground
@@ -107,6 +140,20 @@ export default function List() {
     };
   }, [navigation, startPolling, stopPolling]);
 
+  // Network state effect: monitor online/offline status
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const online = state.isConnected ?? true;
+      console.log(`🌐 Network status changed: ${online ? 'Online' : 'Offline'}`);
+      setIsOnline(online);
+    });
+
+    return () => {
+      console.log('🧹 Cleaning up NetInfo listener');
+      unsubscribe();
+    };
+  }, []);
+
   const renderItem = useCallback(({ item }: { item: User }) => (
     <UserCard
       user={item}
@@ -127,11 +174,17 @@ export default function List() {
   }
 
   if (error) {
-    return <ErrorView message={error} onRetry={fetchUsers} />;
+    const errorMessage = !isOnline
+      ? "Bạn đang ngoại tuyến. Kiểm tra kết nối internet và thử lại."
+      : error;
+    return <ErrorView message={errorMessage} onRetry={fetchUsers} />;
   }
 
-  if (users.length === 0) {
-    return <EmptyView message="Không có người dùng nào" error={error || undefined} />;
+  if (filteredUsers.length === 0) {
+    const emptyMessage = activeFilter === 'Fav'
+      ? "Bạn chưa có sản phẩm yêu thích nào. Đi mua sắm thôi!"
+      : "Không có người dùng nào";
+    return <EmptyView message={emptyMessage} error={error || undefined} />;
   }
 
   return (
@@ -172,6 +225,13 @@ export default function List() {
         renderItem={renderItem}
         contentContainerStyle={styles.listContainer}
         keyboardShouldPersistTaps="handled"
+        onEndReached={handleLoadMore}
+        onEndReachedThreshold={0.2}
+        ListFooterComponent={loadingMore ? (
+          <View style={styles.footerLoading}>
+            <UserSkeleton />
+          </View>
+        ) : null}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -202,5 +262,9 @@ const styles = StyleSheet.create({
   listContainer: {
     paddingHorizontal: 16,
     paddingBottom: 16,
+  },
+  footerLoading: {
+    paddingHorizontal: 16,
+    paddingVertical: 16,
   },
 });
